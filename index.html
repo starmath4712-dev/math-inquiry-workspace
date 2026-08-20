@@ -230,7 +230,7 @@
 <div class="wrap">
 
   <header class="hero">
-    <p class="eyebrow">공통수학 연계 · 통합 워크스페이스</p>
+    <p class="eyebrow">수학 연계 · 통합 워크스페이스</p>
     <h1>수학주제탐구 발표회 워크스페이스</h1>
     <p class="sub">팀 정보와 탐구 주제를 한 번만 입력하면, 6차시 기획안과 탐구보고서를 함께 관리할 수 있습니다.</p>
   </header>
@@ -617,17 +617,10 @@ function renderTabs(){
 }
 
 /* ================= shared topic bank widget ================= */
-function topicCurrentHtml(){
-  const t = state.shared.topic;
-  return t.topic
-    ? `<div class="topic-current"><b>선정된 탐구 주제</b>${escapeHtml(t.topic)}${t.unit?` <span style="color:var(--ink-faint);">(${escapeHtml(t.unit)})</span>`:''}</div>`
-    : `<div class="topic-current empty"><b>선정된 탐구 주제</b>아직 선택되지 않았습니다. 아래에서 고르거나 직접 입력하세요.</div>`;
-}
 function renderTopicBankBlock(){
   return `
-    <div id="unitAccordions"></div>
-    <div style="margin-top:10px;">
-      <div class="field-label" style="margin-bottom:6px;">직접 주제 입력</div>
+    <div style="margin-top:4px;">
+      <div class="field-label" style="margin-bottom:6px;">탐구 주제</div>
       <input class="text-input" id="customTopic" placeholder="자유롭게 탐구 주제를 입력하세요">
     </div>
     <div style="margin-top:14px;">
@@ -638,32 +631,9 @@ function renderTopicBankBlock(){
 }
 function bindTopicBank(){
   const t = state.shared.topic;
-  const acc = document.getElementById('unitAccordions');
-  if(!acc) return;
-  acc.innerHTML = TOPIC_BANK.map((u,ui)=>`
-    <div class="unit-accordion ${state.openUnit===ui?'open':''}" data-ui="${ui}">
-      <div class="unit-head"><span>${u.unit}</span><span class="chev">›</span></div>
-      <div class="unit-body">
-        ${u.topics.map(top=>`<div class="topic-opt ${t.topic===top?'selected':''}" data-topic="${escapeAttr(top)}" data-unit="${escapeAttr(u.unit)}">${escapeHtml(top)}</div>`).join('')}
-      </div>
-    </div>`).join('');
-  acc.querySelectorAll('.unit-head').forEach(h=>{
-    h.addEventListener('click', ()=>{
-      const ui = +h.parentElement.dataset.ui;
-      state.openUnit = (state.openUnit===ui) ? null : ui;
-      renderView();
-    });
-  });
-  acc.querySelectorAll('.topic-opt').forEach(opt=>{
-    opt.addEventListener('click', ()=>{
-      t.topic = opt.getAttribute('data-topic');
-      t.unit = opt.getAttribute('data-unit');
-      scheduleSave(); renderView(); renderTabs();
-    });
-  });
   const customInput = document.getElementById('customTopic');
   if(customInput){
-    customInput.value = (t.unit==="" && t.topic) ? t.topic : "";
+    customInput.value = t.topic || "";
     customInput.addEventListener('input', ()=>{ t.topic=customInput.value; t.unit=""; scheduleSave(); });
     customInput.addEventListener('blur', renderTabs);
   }
@@ -695,7 +665,6 @@ function renderOverview(){
     <div class="card">
       <p class="card-title">Step 2</p>
       <h2>탐구 주제</h2>
-      <p class="field-hint">공통수학 7개 단원별 예시 주제에서 고르거나 직접 입력하세요. 여기서 정한 주제는 기획안과 보고서에 함께 반영됩니다.</p>
       <div class="notice-box">
         <b>주제를 정할 때 꼭 확인하세요</b>
         <ul>
@@ -703,7 +672,6 @@ function renderOverview(){
           <li>여기서 정한 주제는 학교생활기록부 세부능력 및 특기사항(세특)에 '탐구주제'로 그대로 반영되는 경우가 많습니다. 문구가 자신의 탐구 의도를 정확히 드러내는지 확인한 뒤 확정하세요.</li>
         </ul>
       </div>
-      ${topicCurrentHtml()}
       ${renderTopicBankBlock()}
     </div>
 
