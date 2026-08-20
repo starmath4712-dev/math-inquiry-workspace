@@ -359,6 +359,7 @@ function freshState(){
   const sections = {};
   const attachmentsBySection = {};
   for(const key in FIELD_DEFS){ sections[key]={}; FIELD_DEFS[key].forEach(f=> sections[key][f.id]=""); attachmentsBySection[key]=[]; }
+  attachmentsBySection.references = [];
   return {
     mode:"overview",
     openUnit:null,
@@ -384,7 +385,7 @@ const FIREBASE_CONFIG = {
   appId: "1:988560260416:web:b59f74b7d1c64a26fd4ea5"
 };
 
-let db = null, docRef = null, firebaseReady = false;
+let db = null, docRef = null, attachmentsColRef = null, firebaseReady = false;
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 function getRoomCode(){
@@ -408,6 +409,7 @@ function initFirebase(){
     firebase.initializeApp(FIREBASE_CONFIG);
     db = firebase.firestore();
     docRef = db.collection('math-inquiry-workspaces').doc(ROOM);
+    attachmentsColRef = docRef.collection('attachments');
     firebaseReady = true;
     return true;
   }catch(e){
@@ -428,6 +430,7 @@ function isEditingNow(){
 }
 
 let pendingRemote = null;
+let pendingAttachmentsSnap = null;
 function mergeIntoFreshState(parsed){
   const base = freshState();
   const merged = Object.assign(base, parsed);
@@ -442,18 +445,45 @@ function mergeIntoFreshState(parsed){
 }
 function applyRemoteState(parsed, keepLocalNav){
   const nav = {mode:state.mode, planCurrent:state.plan.current, reportCurrent:state.report.current, openUnit:state.openUnit};
+  const savedAttachSessions = {}, savedAttachSections = {};
+  if(firebaseReady){
+    // Firebase 모드에서는 첨부 이미지가 별도 컬렉션에서 관리되므로, 방금 불러온 이미지들을 유지한다
+    for(const k in state.plan.sessions) savedAttachSessions[k] = state.plan.sessions[k].attachments;
+    for(const k in state.report.attachmentsBySection) savedAttachSections[k] = state.report.attachmentsBySection[k];
+  }
   state = mergeIntoFreshState(parsed);
+  if(firebaseReady){
+    for(const k in state.plan.sessions) if(savedAttachSessions[k]) state.plan.sessions[k].attachments = savedAttachSessions[k];
+    for(const k in state.report.attachmentsBySection) if(savedAttachSections[k]) state.report.attachmentsBySection[k] = savedAttachSections[k];
+  }
   if(keepLocalNav){
     state.mode = nav.mode; state.plan.current = nav.planCurrent;
     state.report.current = nav.reportCurrent; state.openUnit = nav.openUnit;
   }
   renderAll();
 }
+function applyAttachmentsSnapshot(snap){
+  for(const k in state.plan.sessions) state.plan.sessions[k].attachments = [];
+  for(const k in state.report.attachmentsBySection) state.report.attachmentsBySection[k] = [];
+  snap.forEach(doc=>{
+    const d = doc.data();
+    if(!d || !d.container) return;
+    const item = {id:doc.id, dataUrl:d.dataUrl, caption:d.caption||""};
+    if(d.container.indexOf('plan-')===0){
+      const n = d.container.slice(5);
+      if(state.plan.sessions[n]) state.plan.sessions[n].attachments.push(item);
+    } else if(d.container.indexOf('report-')===0){
+      const key = d.container.slice(7);
+      if(!state.report.attachmentsBySection[key]) state.report.attachmentsBySection[key] = [];
+      state.report.attachmentsBySection[key].push(item);
+    }
+  });
+}
 
 async function loadState(){
   const ok = initFirebase();
   if(!ok){
-    // localStorage fallback (혼자 쓰거나 Firebase 미설정 시)
+    // localStorage fallback (혼자 쓰거나 Firebase 미설정 시) — 이 모드에서는 첨부 이미지도 state 안에 그대로 저장됨
     try{
       const raw = localStorage.getItem('workspace-v1');
       if(raw) applyRemoteState(JSON.parse(raw), false);
@@ -466,11 +496,14 @@ async function loadState(){
     if(snap.exists && snap.data() && snap.data().state){
       applyRemoteState(JSON.parse(snap.data().state), false);
     } else {
-      await docRef.set({ state: JSON.stringify(state), _writer: CLIENT_ID, _updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-      renderAll();
+      await docRef.set({ state: JSON.stringify(stateForSave()), _writer: CLIENT_ID, _updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     }
+    const attachSnap = await attachmentsColRef.get();
+    applyAttachmentsSnapshot(attachSnap);
+    renderAll();
     setRoomStatus(true, "실시간 연결됨 · 모둠원과 함께 편집 중");
     startSync();
+    startAttachmentsSync();
   }catch(e){
     setRoomStatus(false, "연결 실패 — 이 브라우저에만 임시 저장됩니다");
     renderAll();
@@ -487,15 +520,39 @@ function startSync(){
     setRoomStatus(true, "실시간 연결됨 · 모둠원이 방금 내용을 수정했어요");
   }, ()=>{ setRoomStatus(false, "연결이 끊겼습니다"); });
 }
+function startAttachmentsSync(){
+  attachmentsColRef.onSnapshot(snap=>{
+    if(isEditingNow()){ pendingAttachmentsSnap = snap; return; }
+    applyAttachmentsSnapshot(snap);
+    renderView();
+  }, ()=>{});
+}
 document.addEventListener('focusout', ()=>{
   setTimeout(()=>{
-    if(pendingRemote && !isEditingNow()){
+    if(isEditingNow()) return;
+    let changed = false;
+    if(pendingRemote){
       applyRemoteState(JSON.parse(pendingRemote.state), true);
       pendingRemote = null;
-      setRoomStatus(true, "실시간 연결됨 · 모둠원의 수정 내용을 반영했어요");
+      changed = true;
     }
+    if(pendingAttachmentsSnap){
+      applyAttachmentsSnapshot(pendingAttachmentsSnap);
+      pendingAttachmentsSnap = null;
+      changed = true;
+    }
+    if(changed){ renderAll(); setRoomStatus(true, "실시간 연결됨 · 모둠원의 수정 내용을 반영했어요"); }
   }, 250);
 });
+
+function stateForSave(){
+  // Firebase 모드에서는 첨부 이미지가 별도 컬렉션에 저장되므로, 메인 state 문서에는 담지 않는다 (저장 속도 개선)
+  if(!firebaseReady) return state;
+  const clone = JSON.parse(JSON.stringify(state));
+  for(const k in clone.plan.sessions) clone.plan.sessions[k].attachments = [];
+  for(const k in clone.report.attachmentsBySection) clone.report.attachmentsBySection[k] = [];
+  return clone;
+}
 
 function scheduleSave(){
   const note = document.getElementById('saveNote');
@@ -504,7 +561,7 @@ function scheduleSave(){
   saveTimer = setTimeout(async ()=>{
     try{
       if(firebaseReady && docRef){
-        await docRef.set({ state: JSON.stringify(state), _writer: CLIENT_ID, _updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        await docRef.set({ state: JSON.stringify(stateForSave()), _writer: CLIENT_ID, _updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
         note.textContent = "실시간 저장됨 · " + new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
       } else {
         localStorage.setItem('workspace-v1', JSON.stringify(state));
@@ -808,7 +865,7 @@ function renderPlanPanel(){
   const fbEl = document.getElementById('f-feedback');
   if(fbEl) fbEl.addEventListener('input', e=>{ s.teacherFeedback=e.target.value; scheduleSave(); });
   if(!s.attachments) s.attachments = [];
-  bindAttachmentsBlock('attach-plan-'+state.plan.current, s.attachments);
+  bindAttachmentsBlock('attach-plan-'+state.plan.current, 'plan-'+state.plan.current, s.attachments);
 
   const gotoBtn = document.getElementById('gotoTopicFromPlan');
   if(gotoBtn) gotoBtn.addEventListener('click', ()=>{ state.mode='overview'; renderAll(); });
@@ -931,7 +988,7 @@ function renderReportPanel(){
   });
   const gotoBtn = document.getElementById('gotoTopicFromReport');
   if(gotoBtn) gotoBtn.addEventListener('click', ()=>{ state.mode='overview'; renderAll(); });
-  bindAttachmentsBlock('attach-report-'+sec.key, state.report.attachmentsBySection[sec.key]);
+  bindAttachmentsBlock('attach-report-'+sec.key, 'report-'+sec.key, state.report.attachmentsBySection[sec.key]);
 
   bindReportNav();
 }
@@ -966,7 +1023,18 @@ function fileToResizedDataUrl(file, maxW){
     reader.readAsDataURL(file);
   });
 }
-function renderAttachGrid(idPrefix, list){
+const captionTimers = {};
+function scheduleCaptionSave(container, item){
+  clearTimeout(captionTimers[item.id]);
+  captionTimers[item.id] = setTimeout(()=>{
+    if(firebaseReady && attachmentsColRef && String(item.id).indexOf('local-')!==0){
+      attachmentsColRef.doc(item.id).update({caption:item.caption}).catch(()=>{});
+    } else {
+      scheduleSave();
+    }
+  }, 500);
+}
+function renderAttachGrid(idPrefix, container, list){
   const grid = document.getElementById(idPrefix+'-grid');
   if(!grid) return;
   grid.innerHTML = list.map((a,i)=>`
@@ -978,14 +1046,28 @@ function renderAttachGrid(idPrefix, list){
       </div>
     </div>`).join('');
   grid.querySelectorAll('input[data-i]').forEach(inp=>{
-    inp.addEventListener('input', ()=>{ list[+inp.dataset.i].caption = inp.value; scheduleSave(); });
+    inp.addEventListener('input', ()=>{
+      const item = list[+inp.dataset.i];
+      item.caption = inp.value;
+      scheduleCaptionSave(container, item);
+    });
   });
   grid.querySelectorAll('.row-del').forEach(btn=>{
-    btn.addEventListener('click', ()=>{ list.splice(+btn.dataset.i,1); renderAttachGrid(idPrefix, list); scheduleSave(); });
+    btn.addEventListener('click', ()=>{
+      const item = list[+btn.dataset.i];
+      if(firebaseReady && attachmentsColRef && String(item.id).indexOf('local-')!==0){
+        attachmentsColRef.doc(item.id).delete().catch(()=>{});
+        // 삭제 결과는 실시간 리스너를 통해 화면에 반영됨
+      } else {
+        list.splice(+btn.dataset.i,1);
+        renderAttachGrid(idPrefix, container, list);
+        scheduleSave();
+      }
+    });
   });
 }
-function bindAttachmentsBlock(idPrefix, list){
-  renderAttachGrid(idPrefix, list);
+function bindAttachmentsBlock(idPrefix, container, list){
+  renderAttachGrid(idPrefix, container, list);
   const input = document.getElementById(idPrefix+'-input');
   if(!input) return;
   input.addEventListener('change', async (e)=>{
@@ -993,12 +1075,17 @@ function bindAttachmentsBlock(idPrefix, list){
     for(const file of files){
       try{
         const dataUrl = await fileToResizedDataUrl(file, 900);
-        list.push({dataUrl, caption:""});
+        if(firebaseReady && attachmentsColRef){
+          // 별도 컬렉션에 개별 저장 → 다른 필드 저장 속도에 영향 없음. 업로드 결과는 실시간 리스너로 화면에 반영됨.
+          await attachmentsColRef.add({ container, dataUrl, caption:"", createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+        } else {
+          list.push({id:'local-'+Math.random().toString(36).slice(2), dataUrl, caption:""});
+          renderAttachGrid(idPrefix, container, list);
+          scheduleSave();
+        }
       }catch(err){ /* 개별 파일 실패는 무시하고 계속 */ }
     }
     input.value = "";
-    renderAttachGrid(idPrefix, list);
-    scheduleSave();
   });
 }
 function renderReferencesPanel(panel, sec){
@@ -1017,7 +1104,7 @@ function renderReferencesPanel(panel, sec){
     </div>
   `;
   renderRefRows();
-  bindAttachmentsBlock('attach-report-references', state.report.attachmentsBySection.references);
+  bindAttachmentsBlock('attach-report-references', 'report-references', state.report.attachmentsBySection.references);
   document.getElementById('addRef').addEventListener('click', ()=>{ state.report.references.push({author:"",title:"",source:"",year:""}); renderRefRows(); scheduleSave(); renderToc(); renderTabs(); });
   bindReportNav();
   function renderRefRows(){
