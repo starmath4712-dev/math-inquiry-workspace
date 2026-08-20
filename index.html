@@ -372,7 +372,8 @@ function freshState(){
     shared:{title:"",school:"",team:"",members:"",teacher:"",date:"",topic:{unit:"",topic:"",reason:""}},
     plan:{current:2, sessions},
     report:{current:0, sections, references:[{author:"",title:"",source:"",year:""}]},
-    attachmentsMap:{}
+    attachmentsMap:{},
+    attachmentTitles:{}
   };
 }
 let state = freshState();
@@ -475,6 +476,9 @@ function getAttachList(container){
   if(!state.attachmentsMap) state.attachmentsMap = {};
   if(!state.attachmentsMap[container]) state.attachmentsMap[container] = [];
   return state.attachmentsMap[container];
+}
+function getAttachTitle(container){
+  return (state.attachmentTitles && state.attachmentTitles[container]) || "";
 }
 
 async function loadState(){
@@ -825,18 +829,18 @@ function renderPlanPanel(){
         <div class="field-block">
           <div class="field-label">학습 목표</div>
           <textarea id="f-goal" rows="2">${escapeHtml(s.goal)}</textarea>
-          ${renderAttachmentsBlockHtml('attach-'+pfx+'-goal')}
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-goal', pfx+'-goal')}
         </div>
         <div class="field-block">
           <div class="field-label">주요 활동</div>
           <div class="list-rows" id="activityRows"></div>
           <button class="add-btn" id="addActivity" type="button">+ 활동 추가</button>
-          ${renderAttachmentsBlockHtml('attach-'+pfx+'-activities')}
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-activities', pfx+'-activities')}
         </div>
         <div class="field-block">
           <div class="field-label">산출물</div>
           <input class="text-input" id="f-output" value="${escapeHtml(s.output)}">
-          ${renderAttachmentsBlockHtml('attach-'+pfx+'-output')}
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-output', pfx+'-output')}
         </div>
       </div>
       <div>
@@ -844,14 +848,14 @@ function renderPlanPanel(){
           <div class="field-label">체크리스트</div>
           <div class="checklist" id="checklistRows"></div>
           <button class="add-btn" id="addChecklist" type="button">+ 항목 추가</button>
-          ${renderAttachmentsBlockHtml('attach-'+pfx+'-checklist')}
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-checklist', pfx+'-checklist')}
         </div>
         <div class="field-block">
           <div class="field-label">모둠 메모</div>
           <textarea id="f-notes" rows="5" placeholder="이번 차시에서 논의한 내용, 다음 차시까지 할 일 등을 기록하세요.">${escapeHtml(s.notes)}</textarea>
-          ${renderAttachmentsBlockHtml('attach-'+pfx+'-notes')}
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-notes', pfx+'-notes')}
         </div>
-        ${feedbackBlock ? feedbackBlock.replace('</textarea>', '</textarea>'+renderAttachmentsBlockHtml('attach-'+pfx+'-teacherFeedback')) : ""}
+        ${feedbackBlock ? feedbackBlock.replace('</textarea>', '</textarea>'+renderAttachmentsBlockHtml('attach-'+pfx+'-teacherFeedback', pfx+'-teacherFeedback')) : ""}
       </div>
     </div>
     <div class="panel-nav">
@@ -962,7 +966,7 @@ function renderReportPanel(){
       <p class="field-hint">${f.hint}</p>
       <textarea data-id="${f.id}" rows="4">${escapeHtml(s[f.id])}</textarea>
       ${f.importFrom ? `<button class="import-btn" data-import="${f.id}" data-from="${f.importFrom}" type="button">↧ 기획안 ${f.importFrom}차시 내용 불러오기</button>` : ""}
-      ${renderAttachmentsBlockHtml('attach-'+c)}
+      ${renderAttachmentsBlockHtml('attach-'+c, c)}
     </div>`;
   }).join('');
 
@@ -1002,11 +1006,13 @@ function renderReportPanel(){
 }
 
 /* ---- 사진/스캔 첨부 (모든 차시·섹션 공용) ---- */
-function renderAttachmentsBlockHtml(idPrefix){
+function renderAttachmentsBlockHtml(idPrefix, container){
+  const title = (state.attachmentTitles && state.attachmentTitles[container]) || "";
   return `
     <div class="field-block">
       <div class="field-label">사진 / 스캔 첨부</div>
       <p class="field-hint">손으로 푼 수식, 그래프, 계산 과정을 사진이나 스캔본으로 찍어 올리세요. 자동으로 크기를 줄여 저장하며, 미리보기·인쇄 문서에도 함께 나옵니다. (한 장당 용량이 크면 저장이 느려지거나 실패할 수 있으니, 너무 고화질 원본보다는 적당히 압축된 사진을 권장합니다.)</p>
+      <input class="text-input" id="${idPrefix}-title" placeholder="미리보기·인쇄에 표시될 제목 (예: 결과 그래프, 계산 과정 등)" value="${escapeAttr(title)}" style="margin-bottom:8px;">
       <input type="file" id="${idPrefix}-input" accept="image/*" multiple style="margin-bottom:10px;">
       <div id="${idPrefix}-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px;"></div>
     </div>`;
@@ -1076,6 +1082,14 @@ function renderAttachGrid(idPrefix, container, list){
 }
 function bindAttachmentsBlock(idPrefix, container, list){
   renderAttachGrid(idPrefix, container, list);
+  const titleInput = document.getElementById(idPrefix+'-title');
+  if(titleInput){
+    titleInput.addEventListener('input', ()=>{
+      if(!state.attachmentTitles) state.attachmentTitles = {};
+      state.attachmentTitles[container] = titleInput.value;
+      scheduleSave();
+    });
+  }
   const input = document.getElementById(idPrefix+'-input');
   if(!input) return;
   input.addEventListener('change', async (e)=>{
@@ -1114,14 +1128,12 @@ function renderReferencesPanel(panel, sec){
     <p class="field-hint" style="margin-bottom:14px;">표기 예시: 저자(연도). 『자료명』. 출처(발행처/URL 등).</p>
     <div class="ref-rows" id="refRows"></div>
     <button class="add-btn" id="addRef" type="button">+ 참고문헌 추가</button>
-    ${renderAttachmentsBlockHtml('attach-report-references')}
     <div class="panel-nav">
       <button class="nav-btn" id="prevBtn">← 이전</button>
       <button class="nav-btn primary" id="nextBtn" disabled>완료</button>
     </div>
   `;
   renderRefRows();
-  bindAttachmentsBlock('attach-report-references', 'report-references', getAttachList('report-references'));
   document.getElementById('addRef').addEventListener('click', ()=>{ state.report.references.push({author:"",title:"",source:"",year:""}); renderRefRows(); scheduleSave(); renderToc(); renderTabs(); });
   bindReportNav();
   function renderRefRows(){
@@ -1158,9 +1170,11 @@ function openPreview(){
 }
 function closePreview(){ document.getElementById('modalOverlay').classList.remove('open'); }
 
-function renderAttachmentsDocHtml(list){
+function renderAttachmentsDocHtml(list, title){
   if(!list || !list.length) return "";
-  return `<p><b>첨부 사진/스캔</b></p><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:4px;">`
+  const t = (title||"").trim();
+  return (t ? `<h3>${escapeHtml(t)}</h3>` : "")
+    + `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:4px;">`
     + list.map(a=>`<div><img src="${a.dataUrl}" style="width:100%;border-radius:6px;border:1px solid var(--line);">${a.caption?`<p style="font-size:11.5px;color:var(--ink-soft);margin:4px 0 0;">${escapeHtml(a.caption)}</p>`:''}</div>`).join('')
     + `</div>`;
 }
@@ -1183,19 +1197,19 @@ function renderPlanDoc(){
     html += `<div class="doc-section">
       <h2 style="font-size:14px;">${meta.tag} · ${escapeHtml(meta.title)}</h2>
       <p><b>목표</b> ${escapeHtml(s.goal)}</p>
-      ${renderAttachmentsDocHtml(getAttachList(pfx+'-goal'))}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-goal'), getAttachTitle(pfx+'-goal'))}
       <p><b>활동</b></p>
       <ul>${s.activities.filter(a=>a.trim()).map(a=>`<li>${escapeHtml(a)}</li>`).join('') || '<li>-</li>'}</ul>
-      ${renderAttachmentsDocHtml(getAttachList(pfx+'-activities'))}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-activities'), getAttachTitle(pfx+'-activities'))}
       <p><b>산출물</b> ${escapeHtml(s.output)||'-'}</p>
-      ${renderAttachmentsDocHtml(getAttachList(pfx+'-output'))}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-output'), getAttachTitle(pfx+'-output'))}
       <p><b>체크리스트</b></p>
       <ul>${s.checklist.filter(c=>c.text.trim()).map(c=>`<li>${c.done?'✅':'⬜'} ${escapeHtml(c.text)}</li>`).join('') || '<li>-</li>'}</ul>
-      ${renderAttachmentsDocHtml(getAttachList(pfx+'-checklist'))}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-checklist'), getAttachTitle(pfx+'-checklist'))}
       ${s.notes.trim() ? `<p><b>메모</b> ${escapeHtml(s.notes)}</p>` : ''}
-      ${renderAttachmentsDocHtml(getAttachList(pfx+'-notes'))}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-notes'), getAttachTitle(pfx+'-notes'))}
       ${(s.teacherFeedback||'').trim() ? `<p><b>교사 피드백</b> ${escapeHtml(s.teacherFeedback)}</p>` : ''}
-      ${renderAttachmentsDocHtml(getAttachList(pfx+'-teacherFeedback'))}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-teacherFeedback'), getAttachTitle(pfx+'-teacherFeedback'))}
     </div>`;
   });
   html += `</div>`;
@@ -1229,12 +1243,11 @@ function renderReportDoc(){
       const filled = state.report.references.filter(r=> r.author.trim()||r.title.trim()||r.source.trim());
       if(!filled.length) html += `<p>-</p>`;
       else filled.forEach(r=> html += `<p class="doc-ref">${escapeHtml(r.author)}${r.author&&r.year?'(' + escapeHtml(r.year) + ')':''}. 『${escapeHtml(r.title)}』. ${escapeHtml(r.source)}</p>`);
-      html += renderAttachmentsDocHtml(getAttachList('report-references'));
     } else {
       FIELD_DEFS[sec.key].forEach(f=>{
         const v = state.report.sections[sec.key][f.id];
         html += `<h3>${f.label}</h3><p>${escapeHtml(v) || '-'}</p>`;
-        html += renderAttachmentsDocHtml(getAttachList('report-'+sec.key+'-'+f.id));
+        html += renderAttachmentsDocHtml(getAttachList('report-'+sec.key+'-'+f.id), getAttachTitle('report-'+sec.key+'-'+f.id));
       });
     }
     html += `</div>`;
