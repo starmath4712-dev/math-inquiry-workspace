@@ -196,6 +196,7 @@
   .modal-overlay.open{display:flex;}
   .doc{background:#fff; width:100%; max-width:800px; border-radius:12px; padding:0; position:relative;}
   .doc-close{position:absolute; top:16px; right:16px; width:32px; height:32px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:16px; color:var(--ink-soft); z-index:2;}
+  .doc-toolbar{display:flex; justify-content:flex-end; gap:8px; margin-bottom:10px;}
   .doc-cover{padding:70px 56px 50px; text-align:center; border-bottom:1px dashed var(--line);}
   .doc-cover .k1{font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--teal); margin-bottom:26px;}
   .doc-cover h1{font-size:26px; margin:0 0 10px; line-height:1.4;}
@@ -225,6 +226,7 @@
 <!-- Firebase (실시간 동기화용) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <div class="wrap">
 
   <header class="hero">
@@ -257,7 +259,13 @@
 </div>
 
 <div class="modal-overlay" id="modalOverlay">
-  <div class="doc" id="docContent"></div>
+  <div style="width:100%; max-width:800px;">
+    <div class="doc-toolbar">
+      <button class="tool-btn accent" id="docPrintBtn">🖨 인쇄</button>
+      <button class="tool-btn accent" id="docDownloadBtn">⬇ PDF 다운로드</button>
+    </div>
+    <div class="doc" id="docContent"></div>
+  </div>
 </div>
 
 <script>
@@ -354,18 +362,17 @@ function freshState(){
   for(const k in DEFAULT_SESSIONS){
     const d = DEFAULT_SESSIONS[k];
     sessions[k] = { goal:d.goal, activities:[...d.activities], output:d.output,
-      checklist:d.checklist.map(t=>({text:t,done:false})), notes:"", teacherFeedback:"", attachments:[] };
+      checklist:d.checklist.map(t=>({text:t,done:false})), notes:"", teacherFeedback:"" };
   }
   const sections = {};
-  const attachmentsBySection = {};
-  for(const key in FIELD_DEFS){ sections[key]={}; FIELD_DEFS[key].forEach(f=> sections[key][f.id]=""); attachmentsBySection[key]=[]; }
-  attachmentsBySection.references = [];
+  for(const key in FIELD_DEFS){ sections[key]={}; FIELD_DEFS[key].forEach(f=> sections[key][f.id]=""); }
   return {
     mode:"overview",
     openUnit:null,
     shared:{title:"",school:"",team:"",members:"",teacher:"",date:"",topic:{unit:"",topic:"",reason:""}},
     plan:{current:2, sessions},
-    report:{current:0, sections, references:[{author:"",title:"",source:"",year:""}], attachmentsBySection}
+    report:{current:0, sections, references:[{author:"",title:"",source:"",year:""}]},
+    attachmentsMap:{}
   };
 }
 let state = freshState();
@@ -445,17 +452,9 @@ function mergeIntoFreshState(parsed){
 }
 function applyRemoteState(parsed, keepLocalNav){
   const nav = {mode:state.mode, planCurrent:state.plan.current, reportCurrent:state.report.current, openUnit:state.openUnit};
-  const savedAttachSessions = {}, savedAttachSections = {};
-  if(firebaseReady){
-    // Firebase 모드에서는 첨부 이미지가 별도 컬렉션에서 관리되므로, 방금 불러온 이미지들을 유지한다
-    for(const k in state.plan.sessions) savedAttachSessions[k] = state.plan.sessions[k].attachments;
-    for(const k in state.report.attachmentsBySection) savedAttachSections[k] = state.report.attachmentsBySection[k];
-  }
+  const savedAttachMap = state.attachmentsMap; // 첨부 이미지는 별도 리스너가 관리하므로 문서 내용 갱신과 무관하게 유지
   state = mergeIntoFreshState(parsed);
-  if(firebaseReady){
-    for(const k in state.plan.sessions) if(savedAttachSessions[k]) state.plan.sessions[k].attachments = savedAttachSessions[k];
-    for(const k in state.report.attachmentsBySection) if(savedAttachSections[k]) state.report.attachmentsBySection[k] = savedAttachSections[k];
-  }
+  if(firebaseReady) state.attachmentsMap = savedAttachMap || {};
   if(keepLocalNav){
     state.mode = nav.mode; state.plan.current = nav.planCurrent;
     state.report.current = nav.reportCurrent; state.openUnit = nav.openUnit;
@@ -463,21 +462,19 @@ function applyRemoteState(parsed, keepLocalNav){
   renderAll();
 }
 function applyAttachmentsSnapshot(snap){
-  for(const k in state.plan.sessions) state.plan.sessions[k].attachments = [];
-  for(const k in state.report.attachmentsBySection) state.report.attachmentsBySection[k] = [];
+  const map = {};
   snap.forEach(doc=>{
     const d = doc.data();
     if(!d || !d.container) return;
-    const item = {id:doc.id, dataUrl:d.dataUrl, caption:d.caption||""};
-    if(d.container.indexOf('plan-')===0){
-      const n = d.container.slice(5);
-      if(state.plan.sessions[n]) state.plan.sessions[n].attachments.push(item);
-    } else if(d.container.indexOf('report-')===0){
-      const key = d.container.slice(7);
-      if(!state.report.attachmentsBySection[key]) state.report.attachmentsBySection[key] = [];
-      state.report.attachmentsBySection[key].push(item);
-    }
+    if(!map[d.container]) map[d.container] = [];
+    map[d.container].push({id:doc.id, dataUrl:d.dataUrl, caption:d.caption||""});
   });
+  state.attachmentsMap = map;
+}
+function getAttachList(container){
+  if(!state.attachmentsMap) state.attachmentsMap = {};
+  if(!state.attachmentsMap[container]) state.attachmentsMap[container] = [];
+  return state.attachmentsMap[container];
 }
 
 async function loadState(){
@@ -549,8 +546,7 @@ function stateForSave(){
   // Firebase 모드에서는 첨부 이미지가 별도 컬렉션에 저장되므로, 메인 state 문서에는 담지 않는다 (저장 속도 개선)
   if(!firebaseReady) return state;
   const clone = JSON.parse(JSON.stringify(state));
-  for(const k in clone.plan.sessions) clone.plan.sessions[k].attachments = [];
-  for(const k in clone.report.attachmentsBySection) clone.report.attachmentsBySection[k] = [];
+  clone.attachmentsMap = {};
   return clone;
 }
 
@@ -819,6 +815,7 @@ function renderPlanPanel(){
           <textarea id="f-feedback" rows="4" placeholder="이번 차시 활동에 대한 지도교사의 피드백을 기록하세요.">${escapeHtml(s.teacherFeedback||"")}</textarea>
         </div>` : "";
 
+  const pfx = 'plan-'+state.plan.current;
   panel.innerHTML = `
     <div class="panel-head"><span class="section-tag">${meta.tag}</span><h2>${meta.title}</h2></div>
     <p class="panel-desc">${meta.desc}</p>
@@ -828,15 +825,18 @@ function renderPlanPanel(){
         <div class="field-block">
           <div class="field-label">학습 목표</div>
           <textarea id="f-goal" rows="2">${escapeHtml(s.goal)}</textarea>
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-goal')}
         </div>
         <div class="field-block">
           <div class="field-label">주요 활동</div>
           <div class="list-rows" id="activityRows"></div>
           <button class="add-btn" id="addActivity" type="button">+ 활동 추가</button>
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-activities')}
         </div>
         <div class="field-block">
           <div class="field-label">산출물</div>
           <input class="text-input" id="f-output" value="${escapeHtml(s.output)}">
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-output')}
         </div>
       </div>
       <div>
@@ -844,13 +844,14 @@ function renderPlanPanel(){
           <div class="field-label">체크리스트</div>
           <div class="checklist" id="checklistRows"></div>
           <button class="add-btn" id="addChecklist" type="button">+ 항목 추가</button>
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-checklist')}
         </div>
         <div class="field-block">
           <div class="field-label">모둠 메모</div>
           <textarea id="f-notes" rows="5" placeholder="이번 차시에서 논의한 내용, 다음 차시까지 할 일 등을 기록하세요.">${escapeHtml(s.notes)}</textarea>
+          ${renderAttachmentsBlockHtml('attach-'+pfx+'-notes')}
         </div>
-        ${feedbackBlock}
-        ${renderAttachmentsBlockHtml('attach-plan-'+state.plan.current)}
+        ${feedbackBlock ? feedbackBlock.replace('</textarea>', '</textarea>'+renderAttachmentsBlockHtml('attach-'+pfx+'-teacherFeedback')) : ""}
       </div>
     </div>
     <div class="panel-nav">
@@ -864,8 +865,13 @@ function renderPlanPanel(){
   document.getElementById('f-notes').addEventListener('input', e=>{ s.notes=e.target.value; scheduleSave(); });
   const fbEl = document.getElementById('f-feedback');
   if(fbEl) fbEl.addEventListener('input', e=>{ s.teacherFeedback=e.target.value; scheduleSave(); });
-  if(!s.attachments) s.attachments = [];
-  bindAttachmentsBlock('attach-plan-'+state.plan.current, 'plan-'+state.plan.current, s.attachments);
+
+  bindAttachmentsBlock('attach-'+pfx+'-goal', pfx+'-goal', getAttachList(pfx+'-goal'));
+  bindAttachmentsBlock('attach-'+pfx+'-activities', pfx+'-activities', getAttachList(pfx+'-activities'));
+  bindAttachmentsBlock('attach-'+pfx+'-output', pfx+'-output', getAttachList(pfx+'-output'));
+  bindAttachmentsBlock('attach-'+pfx+'-checklist', pfx+'-checklist', getAttachList(pfx+'-checklist'));
+  bindAttachmentsBlock('attach-'+pfx+'-notes', pfx+'-notes', getAttachList(pfx+'-notes'));
+  if(fbEl) bindAttachmentsBlock('attach-'+pfx+'-teacherFeedback', pfx+'-teacherFeedback', getAttachList(pfx+'-teacherFeedback'));
 
   const gotoBtn = document.getElementById('gotoTopicFromPlan');
   if(gotoBtn) gotoBtn.addEventListener('click', ()=>{ state.mode='overview'; renderAll(); });
@@ -948,24 +954,23 @@ function renderReportPanel(){
       </div>
     </div>` : "";
 
-  const fieldsHtml = defs.map(f=>`
+  const fieldsHtml = defs.map(f=>{
+    const c = 'report-'+sec.key+'-'+f.id;
+    return `
     <div class="field-block">
       <div class="field-label">${f.label}</div>
       <p class="field-hint">${f.hint}</p>
       <textarea data-id="${f.id}" rows="4">${escapeHtml(s[f.id])}</textarea>
       ${f.importFrom ? `<button class="import-btn" data-import="${f.id}" data-from="${f.importFrom}" type="button">↧ 기획안 ${f.importFrom}차시 내용 불러오기</button>` : ""}
-    </div>`).join('');
-
-  if(!state.report.attachmentsBySection) state.report.attachmentsBySection = {};
-  if(!state.report.attachmentsBySection[sec.key]) state.report.attachmentsBySection[sec.key] = [];
-  const attachBlock = renderAttachmentsBlockHtml('attach-report-'+sec.key);
+      ${renderAttachmentsBlockHtml('attach-'+c)}
+    </div>`;
+  }).join('');
 
   panel.innerHTML = `
     <div class="panel-head"><span class="section-tag">${sec.roman}</span><h2>${sec.title}</h2></div>
     <p class="panel-desc">${sec.desc}</p>
     ${topicBlock}
     ${fieldsHtml}
-    ${attachBlock}
     <div class="panel-nav">
       <button class="nav-btn" id="prevBtn" ${state.report.current===0?'disabled':''}>← 이전</button>
       <button class="nav-btn primary" id="nextBtn" ${state.report.current===SECTIONS.length-1?'disabled':''}>다음 →</button>
@@ -988,7 +993,10 @@ function renderReportPanel(){
   });
   const gotoBtn = document.getElementById('gotoTopicFromReport');
   if(gotoBtn) gotoBtn.addEventListener('click', ()=>{ state.mode='overview'; renderAll(); });
-  bindAttachmentsBlock('attach-report-'+sec.key, 'report-'+sec.key, state.report.attachmentsBySection[sec.key]);
+  defs.forEach(f=>{
+    const c = 'report-'+sec.key+'-'+f.id;
+    bindAttachmentsBlock('attach-'+c, c, getAttachList(c));
+  });
 
   bindReportNav();
 }
@@ -1072,6 +1080,7 @@ function bindAttachmentsBlock(idPrefix, container, list){
   if(!input) return;
   input.addEventListener('change', async (e)=>{
     const files = Array.from(e.target.files || []);
+    let failCount = 0, lastErr = null;
     for(const file of files){
       try{
         const dataUrl = await fileToResizedDataUrl(file, 900);
@@ -1083,14 +1092,22 @@ function bindAttachmentsBlock(idPrefix, container, list){
           renderAttachGrid(idPrefix, container, list);
           scheduleSave();
         }
-      }catch(err){ /* 개별 파일 실패는 무시하고 계속 */ }
+      }catch(err){ failCount++; lastErr = err; }
     }
     input.value = "";
+    if(failCount>0){
+      const code = (lastErr && lastErr.code) ? lastErr.code : '';
+      let msg = `사진 ${failCount}장을 저장하지 못했습니다.`;
+      if(code === 'permission-denied'){
+        msg += '\n\n원인: Firestore 보안 규칙에 "attachments" 서브컬렉션 허용이 빠져있을 가능성이 높습니다. Firebase 콘솔 → Firestore → 규칙에서 확인해주세요.';
+      } else if(lastErr && lastErr.message){
+        msg += `\n\n오류 내용: ${lastErr.message}`;
+      }
+      alert(msg);
+    }
   });
 }
 function renderReferencesPanel(panel, sec){
-  if(!state.report.attachmentsBySection) state.report.attachmentsBySection = {};
-  if(!state.report.attachmentsBySection.references) state.report.attachmentsBySection.references = [];
   panel.innerHTML = `
     <div class="panel-head"><span class="section-tag">${sec.roman}</span><h2>${sec.title}</h2></div>
     <p class="panel-desc">${sec.desc}</p>
@@ -1104,7 +1121,7 @@ function renderReferencesPanel(panel, sec){
     </div>
   `;
   renderRefRows();
-  bindAttachmentsBlock('attach-report-references', 'report-references', state.report.attachmentsBySection.references);
+  bindAttachmentsBlock('attach-report-references', 'report-references', getAttachList('report-references'));
   document.getElementById('addRef').addEventListener('click', ()=>{ state.report.references.push({author:"",title:"",source:"",year:""}); renderRefRows(); scheduleSave(); renderToc(); renderTabs(); });
   bindReportNav();
   function renderRefRows(){
@@ -1162,17 +1179,23 @@ function renderPlanDoc(){
     <h2 style="font-size:15px;border-bottom:2px solid var(--ink);padding-bottom:6px;">차시별 계획</h2>`;
   SESSION_META.forEach(meta=>{
     const s = state.plan.sessions[meta.n];
+    const pfx = 'plan-'+meta.n;
     html += `<div class="doc-section">
       <h2 style="font-size:14px;">${meta.tag} · ${escapeHtml(meta.title)}</h2>
       <p><b>목표</b> ${escapeHtml(s.goal)}</p>
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-goal'))}
       <p><b>활동</b></p>
       <ul>${s.activities.filter(a=>a.trim()).map(a=>`<li>${escapeHtml(a)}</li>`).join('') || '<li>-</li>'}</ul>
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-activities'))}
       <p><b>산출물</b> ${escapeHtml(s.output)||'-'}</p>
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-output'))}
       <p><b>체크리스트</b></p>
       <ul>${s.checklist.filter(c=>c.text.trim()).map(c=>`<li>${c.done?'✅':'⬜'} ${escapeHtml(c.text)}</li>`).join('') || '<li>-</li>'}</ul>
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-checklist'))}
       ${s.notes.trim() ? `<p><b>메모</b> ${escapeHtml(s.notes)}</p>` : ''}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-notes'))}
       ${(s.teacherFeedback||'').trim() ? `<p><b>교사 피드백</b> ${escapeHtml(s.teacherFeedback)}</p>` : ''}
-      ${renderAttachmentsDocHtml(s.attachments)}
+      ${renderAttachmentsDocHtml(getAttachList(pfx+'-teacherFeedback'))}
     </div>`;
   });
   html += `</div>`;
@@ -1206,13 +1229,13 @@ function renderReportDoc(){
       const filled = state.report.references.filter(r=> r.author.trim()||r.title.trim()||r.source.trim());
       if(!filled.length) html += `<p>-</p>`;
       else filled.forEach(r=> html += `<p class="doc-ref">${escapeHtml(r.author)}${r.author&&r.year?'(' + escapeHtml(r.year) + ')':''}. 『${escapeHtml(r.title)}』. ${escapeHtml(r.source)}</p>`);
-      html += renderAttachmentsDocHtml((state.report.attachmentsBySection||{}).references);
+      html += renderAttachmentsDocHtml(getAttachList('report-references'));
     } else {
       FIELD_DEFS[sec.key].forEach(f=>{
         const v = state.report.sections[sec.key][f.id];
         html += `<h3>${f.label}</h3><p>${escapeHtml(v) || '-'}</p>`;
+        html += renderAttachmentsDocHtml(getAttachList('report-'+sec.key+'-'+f.id));
       });
-      html += renderAttachmentsDocHtml((state.report.attachmentsBySection||{})[sec.key]);
     }
     html += `</div>`;
   });
@@ -1269,6 +1292,36 @@ document.getElementById('newRoomBtn').addEventListener('click', ()=>{
   if(!confirm('현재 모둠 데이터와 별개로, 완전히 새로운 빈 모둠 작업공간을 만들까요?')) return;
   const code = Math.random().toString(36).slice(2,8);
   goToRoom(code);
+});
+
+document.getElementById('docPrintBtn').addEventListener('click', ()=>{
+  window.print();
+});
+document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
+  const el = document.getElementById('docContent');
+  const btn = document.getElementById('docDownloadBtn');
+  const oldText = btn.textContent;
+  btn.textContent = "생성 중…"; btn.disabled = true;
+  const baseName = (state.shared.title && state.shared.title.trim()) ? state.shared.title.trim() : (state.mode==='report' ? '탐구보고서' : '기획안');
+  const filename = baseName.replace(/[\\/:*?"<>|]/g,'') + (state.mode==='report' ? '_보고서.pdf' : '_기획안.pdf');
+  if(typeof html2pdf === 'undefined'){
+    alert('PDF 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 시도해주세요.');
+    btn.textContent = oldText; btn.disabled = false;
+    return;
+  }
+  html2pdf().set({
+    margin: 8,
+    filename: filename,
+    image: { type: 'jpeg', quality: 0.92 },
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    pagebreak: { mode: ['css', 'legacy'] }
+  }).from(el).save().then(()=>{
+    btn.textContent = oldText; btn.disabled = false;
+  }).catch(()=>{
+    alert('PDF 생성 중 오류가 발생했습니다. 사진이 너무 많으면 실패할 수 있어요 — 인쇄(브라우저 인쇄 대화상자)로도 저장해보세요.');
+    btn.textContent = oldText; btn.disabled = false;
+  });
 });
 
 loadState();
