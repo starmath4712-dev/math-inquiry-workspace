@@ -612,8 +612,8 @@ function renderTabs(){
     b.addEventListener('click', ()=>{ state.mode=b.getAttribute('data-m'); renderAll(); });
   });
   const pv = document.getElementById('previewBtn');
-  if(state.mode==='overview'){ pv.style.display='none'; }
-  else{ pv.style.display='inline-block'; pv.textContent = state.mode==='plan' ? '기획안 미리보기 / 인쇄' : '보고서 미리보기 / 인쇄'; }
+  pv.style.display='inline-block';
+  pv.textContent = state.mode==='plan' ? '기획안 미리보기 / 인쇄' : (state.mode==='report' ? '보고서 미리보기 / 인쇄' : '개요 미리보기 / 인쇄');
 }
 
 /* ================= shared topic bank widget ================= */
@@ -1133,7 +1133,8 @@ function bindReportNav(){
 /* ================= preview / print ================= */
 function openPreview(){
   if(state.mode==='report') renderReportDoc();
-  else renderPlanDoc();
+  else if(state.mode==='plan') renderPlanDoc();
+  else renderOverviewDoc();
   document.getElementById('modalOverlay').classList.add('open');
 }
 function closePreview(){ document.getElementById('modalOverlay').classList.remove('open'); }
@@ -1145,6 +1146,29 @@ function renderAttachmentsDocHtml(list, title){
     + `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:4px;">`
     + list.map(a=>`<div><img src="${a.dataUrl}" style="width:100%;border-radius:6px;border:1px solid var(--line);">${a.caption?`<p style="font-size:11.5px;color:var(--ink-soft);margin:4px 0 0;">${escapeHtml(a.caption)}</p>`:''}</div>`).join('')
     + `</div>`;
+}
+function renderOverviewDoc(){
+  const sh = state.shared;
+  let html = `<button class="doc-close" id="docClose">×</button>`;
+  html += `<div class="doc-body" style="padding-top:44px;">
+    <h1 class="doc-title" style="text-align:center;font-size:22px;margin-bottom:4px;">${escapeHtml(sh.title || "수학주제탐구 발표회 워크스페이스")}</h1>
+    <p style="text-align:center;color:var(--ink-soft);font-family:var(--mono);font-size:12px;margin-bottom:22px;">수학 연계 · 개요</p>
+    <table class="doc-cover-table" style="width:100%;margin-bottom:24px;">
+      <tr><td class="k">학교 / 학급</td><td>${escapeHtml(sh.school)||'-'}</td></tr>
+      <tr><td class="k">모둠명</td><td>${escapeHtml(sh.team)||'-'}</td></tr>
+      <tr><td class="k">모둠원</td><td>${escapeHtml(sh.members)||'-'}</td></tr>
+      <tr><td class="k">지도교사</td><td>${escapeHtml(sh.teacher)||'-'}</td></tr>
+      <tr><td class="k">작성일</td><td>${escapeHtml(sh.date)||'-'}</td></tr>
+    </table>
+    <div class="doc-section">
+      <h2 style="font-size:15px;border-bottom:2px solid var(--ink);padding-bottom:6px;">탐구 주제</h2>
+      <p>${escapeHtml(sh.topic.topic) || '-'}</p>
+      <h3>주제 선정 이유</h3>
+      <p>${escapeHtml(sh.topic.reason) || '-'}</p>
+    </div>
+  </div>`;
+  document.getElementById('docContent').innerHTML = html;
+  document.getElementById('docClose').addEventListener('click', closePreview);
 }
 function renderPlanDoc(){
   const sh = state.shared;
@@ -1283,8 +1307,9 @@ document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
   const btn = document.getElementById('docDownloadBtn');
   const oldText = btn.textContent;
   btn.textContent = "생성 중…"; btn.disabled = true;
-  const baseName = (state.shared.title && state.shared.title.trim()) ? state.shared.title.trim() : (state.mode==='report' ? '탐구보고서' : '기획안');
-  const filename = baseName.replace(/[\\/:*?"<>|]/g,'') + (state.mode==='report' ? '_보고서.pdf' : '_기획안.pdf');
+  const modeLabel = state.mode==='report' ? '보고서' : (state.mode==='plan' ? '기획안' : '개요');
+  const baseName = (state.shared.title && state.shared.title.trim()) ? state.shared.title.trim() : modeLabel;
+  const filename = baseName.replace(/[\\/:*?"<>|]/g,'') + '_' + modeLabel + '.pdf';
   if(typeof html2pdf === 'undefined'){
     alert('PDF 생성 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하고 다시 시도해주세요.');
     btn.textContent = oldText; btn.disabled = false;
