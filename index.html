@@ -239,6 +239,9 @@
     <span class="spacer"></span>
     <span>공유 코드 <b id="roomCode">-</b></span>
     <button class="tool-btn" id="copyLinkBtn">모둠원 초대 링크 복사</button>
+    <input class="text-input" id="roomInput" placeholder="다른 모둠 코드 입력 (예: team2)" style="width:180px; padding:7px 9px; font-size:12.5px;">
+    <button class="tool-btn" id="joinRoomBtn">이동</button>
+    <button class="tool-btn" id="newRoomBtn">새 모둠 만들기</button>
   </div>
 
   <div class="tabs" id="tabs"></div>
@@ -1071,6 +1074,25 @@ document.getElementById('copyLinkBtn').addEventListener('click', async ()=>{
   }catch(e){
     alert(location.href);
   }
+});
+
+function goToRoom(code){
+  const clean = code.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,12);
+  if(!clean){ alert('영문/숫자로 모둠 코드를 입력해주세요.'); return; }
+  location.href = location.pathname + '?room=' + clean;
+}
+document.getElementById('joinRoomBtn').addEventListener('click', ()=>{
+  const v = document.getElementById('roomInput').value.trim();
+  if(!v){ alert('이동할 모둠 코드를 입력해주세요. (예: team2, 1모둠 → team1 처럼 영문/숫자로)'); return; }
+  goToRoom(v);
+});
+document.getElementById('roomInput').addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter') document.getElementById('joinRoomBtn').click();
+});
+document.getElementById('newRoomBtn').addEventListener('click', ()=>{
+  if(!confirm('현재 모둠 데이터와 별개로, 완전히 새로운 빈 모둠 작업공간을 만들까요?')) return;
+  const code = Math.random().toString(36).slice(2,8);
+  goToRoom(code);
 });
 
 loadState();
