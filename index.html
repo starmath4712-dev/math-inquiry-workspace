@@ -979,7 +979,7 @@ function renderAttachmentsBlockHtml(idPrefix, container){
   return `
     <div class="field-block">
       <div class="field-label">사진 / 스캔 첨부</div>
-      <p class="field-hint">손으로 푼 수식, 그래프, 계산 과정을 사진이나 스캔본으로 찍어 올리세요. 자동으로 크기를 줄여 저장하며, 미리보기·인쇄 문서에도 함께 나옵니다. (한 장당 용량이 크면 저장이 느려지거나 실패할 수 있으니, 너무 고화질 원본보다는 적당히 압축된 사진을 권장합니다.)</p>
+      <p class="field-hint">손으로 푼 수식, 그래프, 계산 과정을 사진이나 스캔본으로 찍어 올리세요. <b>여러 장을 한 번에 선택하거나 여러 번에 나눠 올려도 모두 함께 저장됩니다.</b> 자동으로 크기를 줄여 저장하며, 미리보기·인쇄 문서에도 함께 나옵니다. (한 장당 용량이 크면 저장이 느려지거나 실패할 수 있으니, 너무 고화질 원본보다는 적당히 압축된 사진을 권장합니다.)</p>
       <input class="text-input" id="${idPrefix}-title" placeholder="미리보기·인쇄에 표시될 제목 (예: 결과 그래프, 계산 과정 등)" value="${escapeAttr(title)}" style="margin-bottom:8px;">
       <input type="file" id="${idPrefix}-input" accept="image/*" multiple style="margin-bottom:10px;">
       <div id="${idPrefix}-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px;"></div>
@@ -1062,19 +1062,32 @@ function bindAttachmentsBlock(idPrefix, container, list){
   if(!input) return;
   input.addEventListener('change', async (e)=>{
     const files = Array.from(e.target.files || []);
+    if(!files.length) return;
     let failCount = 0, lastErr = null;
-    for(const file of files){
-      try{
-        const dataUrl = await fileToResizedDataUrl(file, 900);
-        if(firebaseReady && attachmentsColRef){
-          // 별도 컬렉션에 개별 저장 → 다른 필드 저장 속도에 영향 없음. 업로드 결과는 실시간 리스너로 화면에 반영됨.
+    const btn = input; // 업로드 중 표시용
+    if(firebaseReady && attachmentsColRef){
+      // 선택한 모든 사진을 동시에(병렬) 각각 별도 문서로 저장 — 여러 장을 한 번에 올려도 전부 저장됨
+      await Promise.all(files.map(async (file)=>{
+        try{
+          const dataUrl = await fileToResizedDataUrl(file, 900);
           await attachmentsColRef.add({ container, dataUrl, caption:"", createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-        } else {
+        }catch(err){ failCount++; lastErr = err; }
+      }));
+      // 실시간 리스너를 기다리지 않고, 업로드 직후 최신 목록을 다시 받아와 즉시 반영 (여러 장 업로드 시 화면 누락 방지)
+      try{
+        const freshSnap = await attachmentsColRef.get();
+        applyAttachmentsSnapshot(freshSnap);
+        renderView();
+      }catch(err){ /* 무시 — 실시간 리스너가 뒤이어 갱신함 */ }
+    } else {
+      for(const file of files){
+        try{
+          const dataUrl = await fileToResizedDataUrl(file, 900);
           list.push({id:'local-'+Math.random().toString(36).slice(2), dataUrl, caption:""});
-          renderAttachGrid(idPrefix, container, list);
-          scheduleSave();
-        }
-      }catch(err){ failCount++; lastErr = err; }
+        }catch(err){ failCount++; lastErr = err; }
+      }
+      renderAttachGrid(idPrefix, container, list);
+      scheduleSave();
     }
     input.value = "";
     if(failCount>0){
