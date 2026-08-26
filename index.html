@@ -72,6 +72,20 @@
   .topic-current b{color:var(--teal); font-family:var(--mono); font-size:11px; letter-spacing:.05em; display:block; margin-bottom:3px; text-transform:uppercase;}
   .topic-current.empty b{color:var(--ink-faint);}
   .notice-box{border:1px solid var(--amber-line); background:var(--amber-soft); border-radius:10px; padding:12px 14px; margin:14px 0; font-size:12.8px; color:#7A5613;}
+  .name-chip{padding:10px 16px; border-radius:9px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:13.5px; font-weight:600; color:var(--ink);}
+  .name-chip:hover{border-color:var(--teal); color:var(--teal);}
+  .name-chip.active{background:var(--ink); color:#fff; border-color:var(--ink);}
+  .peer-current-bar{display:flex; align-items:center; gap:10px; background:var(--teal-soft); border:1px solid #BFE2DA; border-radius:10px; padding:10px 14px; margin-bottom:16px; font-size:13.5px;}
+  .peer-rate-card{border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; background:#FBFCFE;}
+  .peer-rate-card h4{margin:0 0 10px; font-size:14.5px;}
+  .peer-crit-row{display:flex; align-items:center; gap:12px; margin-bottom:8px;}
+  .peer-crit-row .label{flex:none; width:110px; font-size:12.8px; color:var(--ink-soft);}
+  .star-row{display:flex; gap:4px;}
+  .star-btn{width:28px; height:28px; border-radius:6px; border:1px solid var(--line); background:#fff; cursor:pointer; font-size:14px; color:var(--ink-faint); display:flex; align-items:center; justify-content:center;}
+  .star-btn.on{background:#F7C948; border-color:#E0AC1F; color:#7A5613;}
+  .submit-list{display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px;}
+  .submit-chip{font-size:12px; padding:5px 11px; border-radius:999px; border:1px solid var(--line); color:var(--ink-faint); background:#fff;}
+  .submit-chip.done{border-color:#BFE2DA; background:var(--teal-soft); color:var(--teal); font-weight:700;}
   .notice-box ul{margin:4px 0 0; padding-left:18px;}
   .notice-box li{margin-bottom:4px; line-height:1.5;}
   .notice-box li:last-child{margin-bottom:0;}
@@ -373,7 +387,8 @@ function freshState(){
     plan:{current:2, sessions},
     report:{current:0, sections, references:[{author:"",title:"",source:"",year:""}]},
     attachmentsMap:{},
-    attachmentTitles:{}
+    attachmentTitles:{},
+    peerEvalsAll:{}
   };
 }
 let state = freshState();
@@ -393,7 +408,12 @@ const FIREBASE_CONFIG = {
   appId: "1:988560260416:web:b59f74b7d1c64a26fd4ea5"
 };
 
-let db = null, docRef = null, attachmentsColRef = null, firebaseReady = false;
+/* 동료평가 결과·개인 활동보고서를 보려면 입력해야 하는 비밀번호.
+   여기 문자열만 원하는 값으로 바꾸면 됩니다. (학생들에게는 알려주지 마세요)
+   주의: 이 값은 사이트 소스코드에 그대로 남아있어, 개발자도구로 코드를 보면 알아낼 수 있는 수준의 보호입니다. */
+const TEACHER_PASSWORD = "teacher2026";
+
+let db = null, docRef = null, attachmentsColRef = null, peerEvalsColRef = null, firebaseReady = false;
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 function getRoomCode(){
@@ -418,6 +438,7 @@ function initFirebase(){
     db = firebase.firestore();
     docRef = db.collection('math-inquiry-workspaces').doc(ROOM);
     attachmentsColRef = docRef.collection('attachments');
+    peerEvalsColRef = docRef.collection('peerEvals');
     firebaseReady = true;
     return true;
   }catch(e){
@@ -439,6 +460,7 @@ function isEditingNow(){
 
 let pendingRemote = null;
 let pendingAttachmentsSnap = null;
+let pendingPeerEvalsSnap = null;
 function mergeIntoFreshState(parsed){
   const base = freshState();
   const merged = Object.assign(base, parsed);
@@ -454,8 +476,12 @@ function mergeIntoFreshState(parsed){
 function applyRemoteState(parsed, keepLocalNav){
   const nav = {mode:state.mode, planCurrent:state.plan.current, reportCurrent:state.report.current, openUnit:state.openUnit};
   const savedAttachMap = state.attachmentsMap; // 첨부 이미지는 별도 리스너가 관리하므로 문서 내용 갱신과 무관하게 유지
+  const savedPeerEvals = state.peerEvalsAll; // 동료평가도 마찬가지로 별도 리스너가 관리
   state = mergeIntoFreshState(parsed);
-  if(firebaseReady) state.attachmentsMap = savedAttachMap || {};
+  if(firebaseReady){
+    state.attachmentsMap = savedAttachMap || {};
+    state.peerEvalsAll = savedPeerEvals || {};
+  }
   if(keepLocalNav){
     state.mode = nav.mode; state.plan.current = nav.planCurrent;
     state.report.current = nav.reportCurrent; state.openUnit = nav.openUnit;
@@ -501,10 +527,13 @@ async function loadState(){
     }
     const attachSnap = await attachmentsColRef.get();
     applyAttachmentsSnapshot(attachSnap);
+    const peerSnap = await peerEvalsColRef.get();
+    applyPeerEvalsSnapshot(peerSnap);
     renderAll();
     setRoomStatus(true, "실시간 연결됨 · 모둠원과 함께 편집 중");
     startSync();
     startAttachmentsSync();
+    startPeerEvalsSync();
   }catch(e){
     setRoomStatus(false, "연결 실패 — 이 브라우저에만 임시 저장됩니다");
     renderAll();
@@ -528,6 +557,18 @@ function startAttachmentsSync(){
     renderView();
   }, ()=>{});
 }
+function applyPeerEvalsSnapshot(snap){
+  const map = {};
+  snap.forEach(doc=>{ map[doc.id] = doc.data(); });
+  state.peerEvalsAll = map;
+}
+function startPeerEvalsSync(){
+  peerEvalsColRef.onSnapshot(snap=>{
+    if(isEditingNow()){ pendingPeerEvalsSnap = snap; return; }
+    applyPeerEvalsSnapshot(snap);
+    renderView();
+  }, ()=>{});
+}
 document.addEventListener('focusout', ()=>{
   setTimeout(()=>{
     if(isEditingNow()) return;
@@ -542,15 +583,21 @@ document.addEventListener('focusout', ()=>{
       pendingAttachmentsSnap = null;
       changed = true;
     }
+    if(pendingPeerEvalsSnap){
+      applyPeerEvalsSnapshot(pendingPeerEvalsSnap);
+      pendingPeerEvalsSnap = null;
+      changed = true;
+    }
     if(changed){ renderAll(); setRoomStatus(true, "실시간 연결됨 · 모둠원의 수정 내용을 반영했어요"); }
   }, 250);
 });
 
 function stateForSave(){
-  // Firebase 모드에서는 첨부 이미지가 별도 컬렉션에 저장되므로, 메인 state 문서에는 담지 않는다 (저장 속도 개선)
+  // Firebase 모드에서는 첨부 이미지·동료평가가 별도 컬렉션에 저장되므로, 메인 state 문서에는 담지 않는다 (저장 속도 개선)
   if(!firebaseReady) return state;
   const clone = JSON.parse(JSON.stringify(state));
   clone.attachmentsMap = {};
+  clone.peerEvalsAll = {};
   return clone;
 }
 
@@ -602,7 +649,8 @@ function renderTabs(){
   const tabs = [
     {id:"overview", label:"개요", pct:null},
     {id:"plan", label:"기획안", pct:planPct},
-    {id:"report", label:"보고서", pct:reportPct}
+    {id:"report", label:"보고서", pct:reportPct},
+    {id:"peer", label:"동료평가", pct:null}
   ];
   document.getElementById('tabs').innerHTML = tabs.map(t=>`
     <button class="tab-btn ${state.mode===t.id?'active':''}" data-m="${t.id}">
@@ -613,7 +661,13 @@ function renderTabs(){
   });
   const pv = document.getElementById('previewBtn');
   pv.style.display='inline-block';
-  pv.textContent = state.mode==='plan' ? '기획안 미리보기 / 인쇄' : (state.mode==='report' ? '보고서 미리보기 / 인쇄' : '개요 미리보기 / 인쇄');
+  pv.textContent = state.mode==='plan' ? '기획안 미리보기 / 인쇄' : (state.mode==='report' ? '보고서 미리보기 / 인쇄' : (state.mode==='peer' ? '동료평가 결과 / 개인보고서 인쇄' : '개요 미리보기 / 인쇄'));
+}
+
+/* ================= 이름 파싱 (모둠원 목록) ================= */
+function parseMemberNames(){
+  const raw = state.shared.members || "";
+  return raw.split(/[,、，\n]/).map(s=>s.trim()).filter(Boolean);
 }
 
 /* ================= shared topic bank widget ================= */
@@ -1147,6 +1201,7 @@ function bindReportNav(){
 function openPreview(){
   if(state.mode==='report') renderReportDoc();
   else if(state.mode==='plan') renderPlanDoc();
+  else if(state.mode==='peer') renderPeerDoc();
   else renderOverviewDoc();
   document.getElementById('modalOverlay').classList.add('open');
 }
@@ -1262,6 +1317,262 @@ function renderReportDoc(){
   document.getElementById('docClose').addEventListener('click', closePreview);
 }
 
+/* ================= PEER EVALUATION (동료평가) ================= */
+const PEER_CRITERIA = [
+  {id:'contribution', label:'기여도'},
+  {id:'collaboration', label:'협업 태도'},
+  {id:'responsibility', label:'책임감'}
+];
+function sanitizePeerId(name){
+  return (name||"").trim().replace(/[^\w가-힣]/g,'_').slice(0,60) || 'unnamed';
+}
+let peerSelfName = "";
+try{ peerSelfName = localStorage.getItem('peerName-'+ROOM) || ""; }catch(e){}
+let peerDraft = null;
+let peerPinVerified = false;
+
+function blankPeerDraft(){
+  return { ratings:{}, reflection:{learned:"", improve:"", overall:""}, pin:"" };
+}
+function ensurePeerDraft(){
+  if(peerDraft) return;
+  const saved = state.peerEvalsAll[sanitizePeerId(peerSelfName)];
+  if(saved){
+    peerDraft = { ratings: JSON.parse(JSON.stringify(saved.ratings||{})), reflection: Object.assign({learned:"",improve:"",overall:""}, saved.reflection||{}), pin: saved.pin||"" };
+  } else {
+    peerDraft = blankPeerDraft();
+  }
+}
+function getRatingCell(target, critId){
+  if(!peerDraft.ratings[target]) peerDraft.ratings[target] = {contribution:0, collaboration:0, responsibility:0, comment:""};
+  return peerDraft.ratings[target];
+}
+
+function renderPeerView(){
+  const view = document.getElementById('view');
+  const names = parseMemberNames();
+
+  if(!names.length){
+    view.innerHTML = `
+      <div class="card">
+        <p class="card-title">동료평가 · 개인 활동보고서</p>
+        <h2>모둠원 명단이 필요해요</h2>
+        <p class="field-hint">개요 탭의 "모둠원" 항목에 이름을 쉼표(,)로 구분해 입력하면, 여기서 서로를 평가할 수 있어요. (예: 김OO, 이OO, 박OO)</p>
+        <button class="ov-open-btn" id="goOverviewFromPeer" style="max-width:220px;">개요로 이동 →</button>
+      </div>`;
+    document.getElementById('goOverviewFromPeer').addEventListener('click', ()=>{ state.mode='overview'; renderAll(); });
+    return;
+  }
+
+  if(!peerSelfName || names.indexOf(peerSelfName)===-1){
+    view.innerHTML = `
+      <div class="card">
+        <p class="card-title">동료평가 · 개인 활동보고서</p>
+        <h2>본인 이름을 선택하세요</h2>
+        <p class="field-hint">선택한 이름으로 동료를 평가하고, 개인 활동 소감을 작성하게 됩니다. 한 사람씩 순서대로 진행해주세요.</p>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
+          ${names.map(n=>`<button class="name-chip" data-name="${escapeAttr(n)}">${escapeHtml(n)}</button>`).join('')}
+        </div>
+      </div>`;
+    view.querySelectorAll('.name-chip').forEach(chip=>{
+      chip.addEventListener('click', ()=>{
+        const name = chip.getAttribute('data-name');
+        const saved = state.peerEvalsAll[sanitizePeerId(name)];
+        if(saved && saved.pin){
+          const pin = prompt(`${name}님, 이미 제출한 내용이 있습니다.\n본인 확인을 위해 처음 제출할 때 설정한 비밀번호(PIN)를 입력하세요.`);
+          if(pin === null) return;
+          if(pin !== saved.pin){ alert('비밀번호가 올바르지 않습니다. 본인이 맞다면 다시 시도해주세요.'); return; }
+          peerPinVerified = true;
+        } else {
+          peerPinVerified = false;
+        }
+        peerSelfName = name;
+        try{ localStorage.setItem('peerName-'+ROOM, peerSelfName); }catch(e){}
+        peerDraft = null;
+        renderView();
+      });
+    });
+    return;
+  }
+
+  const savedForSelf = state.peerEvalsAll[sanitizePeerId(peerSelfName)];
+  if(savedForSelf && savedForSelf.pin && !peerPinVerified){
+    view.innerHTML = `
+      <div class="card">
+        <p class="card-title">동료평가 · 개인 활동보고서</p>
+        <h2>본인 확인이 필요해요</h2>
+        <p class="field-hint"><b>${escapeHtml(peerSelfName)}</b>님은 이미 제출한 내용이 있습니다. 처음 제출할 때 설정한 비밀번호(PIN)를 입력하면 이어서 수정할 수 있어요.</p>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+          <input class="text-input" id="peerPinInput" type="password" placeholder="비밀번호(PIN)" style="max-width:180px;">
+          <button class="nav-btn primary" id="peerPinConfirmBtn">확인</button>
+          <button class="tool-btn" id="peerPinSwitchBtn">다른 사람으로 전환</button>
+        </div>
+      </div>`;
+    document.getElementById('peerPinConfirmBtn').addEventListener('click', ()=>{
+      const pin = document.getElementById('peerPinInput').value;
+      if(pin !== savedForSelf.pin){ alert('비밀번호가 올바르지 않습니다.'); return; }
+      peerPinVerified = true;
+      renderView();
+    });
+    document.getElementById('peerPinSwitchBtn').addEventListener('click', ()=>{
+      peerSelfName = ""; peerDraft = null; peerPinVerified = false;
+      try{ localStorage.removeItem('peerName-'+ROOM); }catch(e){}
+      renderView();
+    });
+    return;
+  }
+
+  ensurePeerDraft();
+  const others = names.filter(n=>n!==peerSelfName);
+  const submitted = !!state.peerEvalsAll[sanitizePeerId(peerSelfName)];
+
+  let html = `
+    <div class="peer-current-bar">
+      <span>현재 <b>${escapeHtml(peerSelfName)}</b>(으)로 평가 작성 중</span>
+      <span class="spacer"></span>
+      <button class="tool-btn" id="switchPeerBtn">다른 사람으로 전환</button>
+    </div>
+    <div class="card">
+      <p class="card-title">동료평가</p>
+      <h2>모둠원 평가하기</h2>
+      <p class="field-hint">각 항목을 1~5점으로 평가하고, 필요하면 짧은 코멘트를 남겨주세요.</p>
+      ${others.map(target=>{
+        const cell = getRatingCell(target, null);
+        return `
+        <div class="peer-rate-card">
+          <h4>${escapeHtml(target)}</h4>
+          ${PEER_CRITERIA.map(c=>`
+            <div class="peer-crit-row">
+              <span class="label">${c.label}</span>
+              <div class="star-row" data-target="${escapeAttr(target)}" data-crit="${c.id}">
+                ${[1,2,3,4,5].map(v=>`<button type="button" class="star-btn ${cell[c.id]>=v?'on':''}" data-v="${v}">★</button>`).join('')}
+              </div>
+            </div>`).join('')}
+          <textarea data-comment-target="${escapeAttr(target)}" rows="2" placeholder="코멘트 (선택, 예: 자료조사를 꼼꼼히 해줬어요)">${escapeHtml(cell.comment||'')}</textarea>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="card">
+      <p class="card-title">개인 활동보고서</p>
+      <h2>나의 소감</h2>
+      <div class="field-block">
+        <div class="field-label">이번 탐구를 통해 배운 점</div>
+        <textarea data-refl="learned" rows="3">${escapeHtml(peerDraft.reflection.learned)}</textarea>
+      </div>
+      <div class="field-block">
+        <div class="field-label">아쉬웠던 점 · 다음에 개선하고 싶은 점</div>
+        <textarea data-refl="improve" rows="3">${escapeHtml(peerDraft.reflection.improve)}</textarea>
+      </div>
+      <div class="field-block">
+        <div class="field-label">모둠 활동 전반에 대한 소감</div>
+        <textarea data-refl="overall" rows="3">${escapeHtml(peerDraft.reflection.overall)}</textarea>
+      </div>
+      <button class="nav-btn primary" id="submitPeerBtn">${submitted ? '수정해서 다시 제출하기' : '제출하기'}</button>
+      <span id="peerSaveNote" style="margin-left:10px; font-size:12.5px; color:var(--ink-faint);"></span>
+    </div>
+    <div class="card">
+      <p class="card-title">제출 현황</p>
+      <h2>모둠원 제출 여부</h2>
+      <div class="submit-list">
+        ${names.map(n=>{
+          const done = !!state.peerEvalsAll[sanitizePeerId(n)];
+          return `<span class="submit-chip ${done?'done':''}">${done?'✓ ':''}${escapeHtml(n)}</span>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+  view.innerHTML = html;
+
+  document.getElementById('switchPeerBtn').addEventListener('click', ()=>{
+    peerSelfName = ""; peerDraft = null; peerPinVerified = false;
+    try{ localStorage.removeItem('peerName-'+ROOM); }catch(e){}
+    renderView();
+  });
+  view.querySelectorAll('.star-row').forEach(row=>{
+    const target = row.getAttribute('data-target'), crit = row.getAttribute('data-crit');
+    row.querySelectorAll('.star-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const v = +btn.getAttribute('data-v');
+        const cell = getRatingCell(target, crit);
+        cell[crit] = (cell[crit]===v) ? 0 : v; // 같은 점수 다시 클릭하면 취소
+        renderPeerView();
+      });
+    });
+  });
+  view.querySelectorAll('textarea[data-comment-target]').forEach(ta=>{
+    ta.addEventListener('input', ()=>{
+      const cell = getRatingCell(ta.getAttribute('data-comment-target'), null);
+      cell.comment = ta.value;
+    });
+  });
+  view.querySelectorAll('textarea[data-refl]').forEach(ta=>{
+    ta.addEventListener('input', ()=>{ peerDraft.reflection[ta.getAttribute('data-refl')] = ta.value; });
+  });
+  document.getElementById('submitPeerBtn').addEventListener('click', async ()=>{
+    const note = document.getElementById('peerSaveNote');
+    let pin = peerDraft.pin;
+    if(!pin){
+      pin = prompt('제출 내용을 나중에 다시 확인·수정하려면 4자리 이상의 비밀번호(PIN)를 정해주세요.\n(다른 사람이 알 수 없는 본인만의 번호로 만드세요)');
+      if(pin === null) return;
+      pin = pin.trim();
+      if(pin.length < 4){ alert('비밀번호는 4자리 이상으로 설정해주세요.'); return; }
+      peerDraft.pin = pin;
+    }
+    note.textContent = "저장 중…";
+    const payload = { name: peerSelfName, ratings: peerDraft.ratings, reflection: peerDraft.reflection, pin: pin };
+    try{
+      if(firebaseReady && peerEvalsColRef){
+        await peerEvalsColRef.doc(sanitizePeerId(peerSelfName)).set(Object.assign({}, payload, {updatedAt: firebase.firestore.FieldValue.serverTimestamp()}));
+        note.textContent = "제출 완료!";
+      } else {
+        state.peerEvalsAll[sanitizePeerId(peerSelfName)] = payload;
+        scheduleSave();
+        note.textContent = "이 브라우저에 저장됨 (제출 완료)";
+        renderPeerView();
+      }
+    }catch(e){
+      note.textContent = "저장 실패 — 다시 시도해주세요.";
+    }
+  });
+}
+
+/* ---- 동료평가 결과 · 개인보고서 인쇄 문서 ---- */
+function renderPeerDoc(){
+  const names = parseMemberNames();
+  let html = `<button class="doc-close" id="docClose">×</button>`;
+  html += `<div class="doc-body" style="padding-top:44px;">
+    <h1 class="doc-title" style="text-align:center;font-size:22px;margin-bottom:4px;">${escapeHtml(state.shared.title || "동료평가 · 개인 활동보고서")}</h1>
+    <p style="text-align:center;color:var(--ink-soft);font-family:var(--mono);font-size:12px;margin-bottom:22px;">모둠: ${escapeHtml(state.shared.team)||'-'}</p>
+    <h2 style="font-size:15px;border-bottom:2px solid var(--ink);padding-bottom:6px;">동료평가 결과</h2>`;
+
+  names.forEach(target=>{
+    const rows = names.filter(evaluator=>evaluator!==target).map(evaluator=>{
+      const data = state.peerEvalsAll[sanitizePeerId(evaluator)];
+      const cell = data && data.ratings && data.ratings[target];
+      if(!cell) return null;
+      const scores = PEER_CRITERIA.map(c=>`${c.label} ${cell[c.id]||0}점`).join(' · ');
+      return `<li><b>${escapeHtml(evaluator)}</b>: ${scores}${cell.comment?` — "${escapeHtml(cell.comment)}"`:''}</li>`;
+    }).filter(Boolean);
+    html += `<div class="doc-section"><h3 style="color:var(--ink);font-size:13.5px;">${escapeHtml(target)}에 대한 평가</h3>
+      <ul>${rows.length?rows.join(''):'<li>-</li>'}</ul>
+    </div>`;
+  });
+
+  html += `<h2 style="font-size:15px;border-bottom:2px solid var(--ink);padding-bottom:6px;margin-top:30px;">개인별 활동보고서</h2>`;
+  names.forEach(n=>{
+    const data = state.peerEvalsAll[sanitizePeerId(n)];
+    const r = (data && data.reflection) || {};
+    html += `<div class="doc-section">
+      <h3 style="color:var(--teal);">${escapeHtml(n)}</h3>
+      <p><b>배운 점</b> ${escapeHtml(r.learned)||'-'}</p>
+      <p><b>아쉬웠던 점 · 개선하고 싶은 점</b> ${escapeHtml(r.improve)||'-'}</p>
+      <p><b>전반적인 소감</b> ${escapeHtml(r.overall)||'-'}</p>
+    </div>`;
+  });
+  html += `</div>`;
+  document.getElementById('docContent').innerHTML = html;
+  document.getElementById('docClose').addEventListener('click', closePreview);
+}
 /* ================= utils ================= */
 function escapeHtml(str){ return String(str==null?'':str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(str){ return escapeHtml(str).replace(/"/g,'&quot;'); }
@@ -1270,11 +1581,21 @@ function escapeAttr(str){ return escapeHtml(str).replace(/"/g,'&quot;'); }
 function renderView(){
   if(state.mode==='overview') renderOverview();
   else if(state.mode==='plan') renderPlanView();
-  else renderReportView();
+  else if(state.mode==='report') renderReportView();
+  else renderPeerView();
 }
 function renderAll(){ renderTabs(); renderView(); }
 
-document.getElementById('previewBtn').addEventListener('click', openPreview);
+let peerUnlocked = false;
+document.getElementById('previewBtn').addEventListener('click', ()=>{
+  if(state.mode === 'peer' && !peerUnlocked){
+    const pw = prompt('동료평가 결과·개인 활동보고서는 선생님만 볼 수 있습니다.\n비밀번호를 입력하세요.');
+    if(pw === null) return; // 취소
+    if(pw !== TEACHER_PASSWORD){ alert('비밀번호가 올바르지 않습니다.'); return; }
+    peerUnlocked = true;
+  }
+  openPreview();
+});
 document.getElementById('modalOverlay').addEventListener('click', (e)=>{ if(e.target.id==='modalOverlay') closePreview(); });
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   if(confirm('기획안과 보고서 내용을 모두 초기화할까요? 되돌릴 수 없습니다.')){
@@ -1320,7 +1641,7 @@ document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
   const btn = document.getElementById('docDownloadBtn');
   const oldText = btn.textContent;
   btn.textContent = "생성 중…"; btn.disabled = true;
-  const modeLabel = state.mode==='report' ? '보고서' : (state.mode==='plan' ? '기획안' : '개요');
+  const modeLabel = state.mode==='report' ? '보고서' : (state.mode==='plan' ? '기획안' : (state.mode==='peer' ? '동료평가' : '개요'));
   const baseName = (state.shared.title && state.shared.title.trim()) ? state.shared.title.trim() : modeLabel;
   const filename = baseName.replace(/[\\/:*?"<>|]/g,'') + '_' + modeLabel + '.pdf';
   if(typeof html2pdf === 'undefined'){
