@@ -411,7 +411,10 @@ const FIREBASE_CONFIG = {
 /* 동료평가 결과·개인 활동보고서를 보려면 입력해야 하는 비밀번호.
    여기 문자열만 원하는 값으로 바꾸면 됩니다. (학생들에게는 알려주지 마세요)
    주의: 이 값은 사이트 소스코드에 그대로 남아있어, 개발자도구로 코드를 보면 알아낼 수 있는 수준의 보호입니다. */
-const TEACHER_PASSWORD = "t2026";
+const TEACHER_PASSWORD = "teacher2026";
+
+/* 전체 초기화(모든 기획안·보고서 내용 삭제) 시 요구하는 비밀번호 */
+const RESET_PASSWORD = "t2026";
 
 let db = null, docRef = null, attachmentsColRef = null, peerEvalsColRef = null, firebaseReady = false;
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -1598,7 +1601,10 @@ document.getElementById('previewBtn').addEventListener('click', ()=>{
 });
 document.getElementById('modalOverlay').addEventListener('click', (e)=>{ if(e.target.id==='modalOverlay') closePreview(); });
 document.getElementById('resetBtn').addEventListener('click', ()=>{
-  if(confirm('기획안과 보고서 내용을 모두 초기화할까요? 되돌릴 수 없습니다.')){
+  const pw = prompt('전체 초기화는 되돌릴 수 없습니다.\n진행하려면 비밀번호를 입력하세요.');
+  if(pw === null) return;
+  if(pw !== RESET_PASSWORD){ alert('비밀번호가 올바르지 않습니다.'); return; }
+  if(confirm('정말로 기획안과 보고서 내용을 모두 초기화할까요? 되돌릴 수 없습니다.')){
     state = freshState(); scheduleSave(); renderAll();
   }
 });
