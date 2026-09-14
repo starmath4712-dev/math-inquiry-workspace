@@ -236,12 +236,7 @@
     .doc-close{display:none;}
     .doc-toolbar{display:none;}
   }
-  /* PDF 다운로드 캡처 시 인쇄와 동일한 방식으로 문서만 노출 (화면 밖으로 옮기지 않음) */
-  body.pdf-capturing *{visibility:hidden;}
-  body.pdf-capturing .doc, body.pdf-capturing .doc *{visibility:visible;}
-  body.pdf-capturing .modal-overlay{position:static !important; display:block !important; overflow:visible !important; padding:0 !important; height:auto !important; background:#fff !important;}
-  body.pdf-capturing .doc{position:absolute; top:0; left:0; width:800px; max-width:none; padding:0; background:#fff;}
-  body.pdf-capturing .doc-close, body.pdf-capturing .doc-toolbar{display:none;}
+  /* PDF 다운로드는 화면 위 겹쳐 보이는 복제본을 직접 캡처하는 방식(JS)으로 처리 */
 </style>
 </head>
 <body>
@@ -1651,7 +1646,7 @@ document.getElementById('docPrintBtn').addEventListener('click', ()=>{
   window.print();
 });
 document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
-  const el = document.getElementById('docContent');
+  const original = document.getElementById('docContent');
   const btn = document.getElementById('docDownloadBtn');
   const oldText = btn.textContent;
   btn.textContent = "생성 중…"; btn.disabled = true;
@@ -1664,26 +1659,42 @@ document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
     return;
   }
 
-  // 인쇄와 동일한 방식(문서만 보이게 전환)으로 캡처 — 화면 밖으로 옮기지 않아 빈 캡처 문제를 피한다.
-  document.body.classList.add('pdf-capturing');
+  // visibility 트릭은 캡처 라이브러리에서 제대로 지원되지 않을 수 있어,
+  // 실제로 화면 맨 위에 겹쳐 보이는(짧은 순간 화면에 스치듯 나타나는) 복제본을 만들어 그걸 그대로 캡처한다.
+  const clone = original.cloneNode(true);
+  clone.removeAttribute('id');
+  const oldClose = clone.querySelector('#docClose') || clone.querySelector('.doc-close');
+  if(oldClose) oldClose.remove();
+  clone.style.maxWidth = 'none';
+  clone.style.width = '800px';
+  const wrapper = document.createElement('div');
+  wrapper.style.position = 'fixed';
+  wrapper.style.top = '0';
+  wrapper.style.left = '0';
+  wrapper.style.zIndex = '999999';
+  wrapper.style.background = '#fff';
+  wrapper.style.width = '800px';
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
 
-  const imgs = Array.from(el.querySelectorAll('img'));
+  const imgs = Array.from(clone.querySelectorAll('img'));
   const waitImgs = Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res=>{ img.onload=res; img.onerror=res; })));
+  const waitRepaint = new Promise(res=> requestAnimationFrame(()=> requestAnimationFrame(res)));
 
-  waitImgs.then(()=>{
+  Promise.all([waitImgs, waitRepaint]).then(()=>{
     return html2pdf().set({
       margin: 8,
       filename: filename,
       image: { type: 'jpeg', quality: 0.92 },
-      html2canvas: { scale: 2, useCORS: true, windowWidth: 800, scrollX: 0, scrollY: 0 },
+      html2canvas: { scale: 2, useCORS: true, scrollX: 0, scrollY: 0 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] }
-    }).from(el).save();
+    }).from(clone).save();
   }).then(()=>{
-    document.body.classList.remove('pdf-capturing');
+    document.body.removeChild(wrapper);
     btn.textContent = oldText; btn.disabled = false;
   }).catch(()=>{
-    document.body.classList.remove('pdf-capturing');
+    document.body.removeChild(wrapper);
     alert('PDF 생성 중 오류가 발생했습니다. 사진이 너무 많으면 실패할 수 있어요 — 인쇄(브라우저 인쇄 대화상자)로도 저장해보세요.');
     btn.textContent = oldText; btn.disabled = false;
   });
