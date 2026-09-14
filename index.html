@@ -231,11 +231,17 @@
     body *{visibility:hidden;}
     .doc, .doc *{visibility:visible;}
     .modal-overlay{position:static !important; display:block !important; overflow:visible !important; padding:0 !important; height:auto !important; background:none !important;}
-    .doc{position:static; top:auto; left:auto; width:100%; max-width:none; padding:0;}
+    .doc{position:absolute; top:0; left:0; width:100%; max-width:none; padding:0;}
     .doc-cover{page-break-after:always;}
     .doc-close{display:none;}
     .doc-toolbar{display:none;}
   }
+  /* PDF 다운로드 캡처 시 인쇄와 동일한 방식으로 문서만 노출 (화면 밖으로 옮기지 않음) */
+  body.pdf-capturing *{visibility:hidden;}
+  body.pdf-capturing .doc, body.pdf-capturing .doc *{visibility:visible;}
+  body.pdf-capturing .modal-overlay{position:static !important; display:block !important; overflow:visible !important; padding:0 !important; height:auto !important; background:#fff !important;}
+  body.pdf-capturing .doc{position:absolute; top:0; left:0; width:800px; max-width:none; padding:0; background:#fff;}
+  body.pdf-capturing .doc-close, body.pdf-capturing .doc-toolbar{display:none;}
 </style>
 </head>
 <body>
@@ -1645,7 +1651,7 @@ document.getElementById('docPrintBtn').addEventListener('click', ()=>{
   window.print();
 });
 document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
-  const original = document.getElementById('docContent');
+  const el = document.getElementById('docContent');
   const btn = document.getElementById('docDownloadBtn');
   const oldText = btn.textContent;
   btn.textContent = "생성 중…"; btn.disabled = true;
@@ -1658,23 +1664,10 @@ document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
     return;
   }
 
-  // 모달 안(고정/스크롤 위치)에서 바로 캡처하면 html2canvas가 전체 높이를 잘못 인식해
-  // 첫 페이지만 반복 출력되는 문제가 있어, 문서 밖 일반 흐름 위치에 복제본을 만들어 그걸 캡처한다.
-  const clone = original.cloneNode(true);
-  clone.removeAttribute('id');
-  clone.style.position = 'static';
-  clone.style.maxWidth = '800px';
-  clone.style.width = '800px';
-  const oldClose = clone.querySelector('#docClose') || clone.querySelector('.doc-close');
-  if(oldClose) oldClose.remove();
-  const wrapper = document.createElement('div');
-  wrapper.style.position = 'absolute';
-  wrapper.style.top = '0';
-  wrapper.style.left = '-99999px';
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
+  // 인쇄와 동일한 방식(문서만 보이게 전환)으로 캡처 — 화면 밖으로 옮기지 않아 빈 캡처 문제를 피한다.
+  document.body.classList.add('pdf-capturing');
 
-  const imgs = Array.from(clone.querySelectorAll('img'));
+  const imgs = Array.from(el.querySelectorAll('img'));
   const waitImgs = Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res=>{ img.onload=res; img.onerror=res; })));
 
   waitImgs.then(()=>{
@@ -1685,12 +1678,12 @@ document.getElementById('docDownloadBtn').addEventListener('click', ()=>{
       html2canvas: { scale: 2, useCORS: true, windowWidth: 800, scrollX: 0, scrollY: 0 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
       pagebreak: { mode: ['css', 'legacy'] }
-    }).from(clone).save();
+    }).from(el).save();
   }).then(()=>{
-    document.body.removeChild(wrapper);
+    document.body.classList.remove('pdf-capturing');
     btn.textContent = oldText; btn.disabled = false;
   }).catch(()=>{
-    document.body.removeChild(wrapper);
+    document.body.classList.remove('pdf-capturing');
     alert('PDF 생성 중 오류가 발생했습니다. 사진이 너무 많으면 실패할 수 있어요 — 인쇄(브라우저 인쇄 대화상자)로도 저장해보세요.');
     btn.textContent = oldText; btn.disabled = false;
   });
